@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
- * Copyright (c) 2011 NetApp, Inc.
+ * Copyright 2020 Leon Dang
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -24,32 +24,18 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
-#ifndef	_FBSDRUN_H_
-#define	_FBSDRUN_H_
+#ifndef __MEMDISK_H__
+#define __MEMDISK_H__
 
-#define	VMEXIT_CONTINUE		(0)
-#define	VMEXIT_ABORT		(-1)
+int md_create(const char *src_img);
+int md_num_disks();
+int md_chs(int mdunit, uint16_t *c, uint8_t *h, uint8_t *s);
+ssize_t md_sectsz(int mdunit);
+ssize_t md_sectors(int mdunit);
+uint64_t md_lba_to_offset(int mdunit, ssize_t lba);
+int md_write(int mdunit, uint64_t offset, void *buf, uint64_t len);
+int md_read(int mdunit, uint64_t offset, void *buf, uint64_t len);
 
-struct vmctx;
-extern int guest_ncpus;
-extern uint16_t cores, sockets, threads;
-extern char *guest_uuid_str;
-extern const char *vmname;
-
-void *paddr_guest2host(struct vmctx *ctx, uintptr_t addr, size_t len);
-#ifdef BHYVE_SNAPSHOT
-uintptr_t paddr_host2guest(struct vmctx *ctx, void *addr);
-#endif
-
-void fbsdrun_set_capabilities(struct vmctx *ctx, int cpu);
-void fbsdrun_addcpu(struct vmctx *ctx, int fromcpu, int newcpu, uint64_t rip);
-int  fbsdrun_muxed(void);
-int  fbsdrun_vmexit_on_hlt(void);
-int  fbsdrun_vmexit_on_pause(void);
-int  fbsdrun_disable_x2apic(void);
-int  fbsdrun_virtio_msix(void);
 #endif

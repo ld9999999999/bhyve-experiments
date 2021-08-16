@@ -25,7 +25,7 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD: head/usr.sbin/bhyve/block_if.h 360648 2020-05-05 00:02:04Z jhb $
+ * $FreeBSD$
  */
 
 /*
@@ -72,6 +72,8 @@ int	blockif_queuesz(struct blockif_ctxt *bc);
 int	blockif_is_ro(struct blockif_ctxt *bc);
 int	blockif_candelete(struct blockif_ctxt *bc);
 int	blockif_read(struct blockif_ctxt *bc, struct blockif_req *breq);
+int blockif_read_sync(struct blockif_ctxt *bc, void *buf, size_t sectors, off_t lba);
+int blockif_write_sync(struct blockif_ctxt *bc, void *buf, size_t sectors, off_t lba);
 int	blockif_write(struct blockif_ctxt *bc, struct blockif_req *breq);
 int	blockif_flush(struct blockif_ctxt *bc, struct blockif_req *breq);
 int	blockif_delete(struct blockif_ctxt *bc, struct blockif_req *breq);

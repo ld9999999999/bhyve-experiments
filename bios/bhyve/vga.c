@@ -26,8 +26,14 @@
  * SUCH DAMAGE.
  */
 
+// Basic VGA, support only two graphics modes, and text mode
+// 0x03  80x25 16 color text (CGA,EGA,MCGA,VGA) (640x480x4bpp)
+// 0x12  640x480 16 color graphics (VGA)
+// 0x13  320x200 256 color graphics (MCGA,VGA)
+
+
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/usr.sbin/bhyve/vga.c 335025 2018-06-13 03:22:08Z araujo $");
+__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 
@@ -40,24 +46,41 @@ __FBSDID("$FreeBSD: head/usr.sbin/bhyve/vga.c 335025 2018-06-13 03:22:08Z araujo
 
 #include <machine/vmm.h>
 
+#include "bhyverun.h"
 #include "bhyvegc.h"
 #include "console.h"
 #include "inout.h"
 #include "mem.h"
 #include "vga.h"
+#include "microbios.h"
 
 #define	KB	(1024UL)
 #define	MB	(1024 * 1024UL)
 
-struct vga_softc {
-	struct mem_range	mr;
+char *vga_font_file = NULL;
 
+/* 4-bits-per-pixel to RGB colour map */
+static uint32_t colors4bpp[16] = {
+	0x00000000, 0x000000dd, 0x0000dd00, 0x0000dddd,
+	0x00dd0000, 0x00dd00dd, 0x00dddd00, 0x00dddddd,
+	0x00555555, 0x000000f0, 0x0000f000, 0x0000f0f0,
+	0x00f00000, 0x00f000f0, 0x00f0f000, 0x00ffffff
+};
+
+struct vga_softc {
 	struct bhyvegc		*gc;
 	int			gc_width;
 	int			gc_height;
 	struct bhyvegc_image	*gc_image;
 
-	uint8_t			*vga_ram;
+	uint8_t			*vga_shadow; // Shadow ram area
+	uint8_t                 *vga_ram;    // VGA 0xA0000
+	uint8_t                 *txt_shadow; // Shadow ram of text, to help with only rendering of new characters
+	uint8_t                 *txt_ram;    // Text area 0xB8000
+	uint8_t                 vga_plane;
+	uint8_t                 txt_page;
+	uint8_t			vga_mode;
+	uint8_t			gc_bpp;      // bits per pixel
 
 	/*
 	 * General registers
@@ -172,9 +195,78 @@ struct vga_softc {
 	} vga_dac;
 };
 
+struct vga_softc *vgasc;
+
+
+/* Initialize the defautl colour palette for mode-13h */
+static void
+vga_initialize_palette(struct vga_softc *sc)
+{
+	uint32_t *rgba = sc->vga_dac.dac_palette_rgb;
+	uint8_t r, g, b;
+	int i;
+	static const uint32_t base_palette[] = {
+		0x0000ff, 0x4100ff, 0x8200ff, 0xbe00ff,
+		0xff00ff, 0xff00be, 0xff0082, 0xff0041,
+		0xff0000, 0xff4100, 0xff8200, 0xffbe00,
+		0xffff00, 0xbeff00, 0x82ff00, 0x41ff00,
+
+		0x00ff00, 0x00ff41, 0x00ff82, 0x00ffbe,
+		0x00ffff, 0x00beff, 0x0082ff, 0x0041ff,
+		0x8282ff, 0x9e82ff, 0xbe82ff, 0xdf82ff,
+		0xff82ff, 0xff82df, 0xff82be, 0xff829e,
+
+		0xff8282, 0xff9e82, 0xffbe82, 0xffdf82,
+		0xffff82, 0xdfff82, 0xbeff82, 0x9eff82,
+		0x82ff82, 0x82ff9e, 0x82ffbe, 0x82ffdf,
+		0x82ffff, 0x82dfff, 0x82beff, 0x829eff,
+
+		0xbabaff, 0xcabaff, 0xdfbaff, 0xefbaff,
+		0xffbaff, 0xffbaef, 0xffbadf, 0xffbaca,
+		0xffbaba, 0xffcaba, 0xffdfba, 0xffefba,
+		0xffffba, 0xefffba, 0xdfffba, 0xcaffba,
+
+		0xbaffba, 0xbaffca, 0xbaffdf, 0xbaffef,
+		0xbaffff, 0xbaefff, 0xbadfff, 0xbacaff
+	};
+
+	// first 16 are the same as the 4bpp ones
+	memcpy(rgba, colors4bpp, sizeof(colors4bpp));
+	rgba += 16;
+
+	// the next 16 are grayscale dark to light
+	r = g = b = 15; // 17 steps of gradations;
+	for (i = 0; i < 16; i++) {
+		*rgba++ = r << 16 | g << 8 | b;
+		r += 15;
+		g = b = r;
+	}
+
+	// remaining colours are gradations from bright to dark
+	// transitioning from blue, magenta, ed, yellow, green, and blue
+
+	memcpy(rgba, base_palette, sizeof(base_palette));
+	rgba += sizeof(base_palette)/sizeof(uint32_t);
+	for (i = 0; i < sizeof(base_palette)/sizeof(uint32_t); i++) {
+		uint32_t c = base_palette[i];
+		r = ((c >> 16) & 0xff) / 2;
+		g = ((c >> 8) & 0xff) / 2;
+		b = (c & 0xff) / 2;
+		*rgba++ = r << 16 | g << 8 | b;
+	}
+	for (i = 0; i < sizeof(base_palette)/sizeof(uint32_t); i++) {
+		uint32_t c = base_palette[i];
+		r = ((c >> 16) & 0xff) / 4;
+		g = ((c >> 8) & 0xff) / 4;
+		b = (c & 0xff)/ 4;
+		*rgba++ = r << 16 | g << 8 | b;
+	}
+}
+
 static bool
 vga_in_reset(struct vga_softc *sc)
 {
+return 0;
 	return (((sc->vga_seq.seq_clock_mode & SEQ_CM_SO) != 0) ||
 	    ((sc->vga_seq.seq_reset & SEQ_RESET_ASYNC) == 0) ||
 	    ((sc->vga_seq.seq_reset & SEQ_RESET_SYNC) == 0) ||
@@ -189,139 +281,85 @@ vga_check_size(struct bhyvegc *gc, struct vga_softc *sc)
 	if (vga_in_reset(sc))
 		return;
 
-	//old_width = sc->gc_width;
-	//old_height = sc->gc_height;
 	old_width = sc->gc_image->width;
 	old_height = sc->gc_image->height;
-
-	/*
-	 * Horizontal Display End: For text modes this is the number
-	 * of characters.  For graphics modes this is the number of
-	 * pixels per scanlines divided by the number of pixels per
-	 * character clock.
-	 */
-	sc->gc_width = (sc->vga_crtc.crtc_horiz_disp_end + 1) *
-	    sc->vga_seq.seq_cm_dots;
-
-	sc->gc_height = (sc->vga_crtc.crtc_vert_disp_end |
-	    (((sc->vga_crtc.crtc_overflow & CRTC_OF_VDE8) >> CRTC_OF_VDE8_SHIFT) << 8) |
-	    (((sc->vga_crtc.crtc_overflow & CRTC_OF_VDE9) >> CRTC_OF_VDE9_SHIFT) << 9)) + 1;
 
 	if (old_width != sc->gc_width || old_height != sc->gc_height)
 		bhyvegc_resize(gc, sc->gc_width, sc->gc_height);
 }
 
-static uint32_t
-vga_get_pixel(struct vga_softc *sc, int x, int y)
+static inline uint32_t
+vga_get_pixel(struct vga_softc *sc, uint8_t data)
 {
-	int offset;
-	int bit;
-	uint8_t data;
-	uint8_t idx;
+	return (sc->vga_dac.dac_palette_rgb[data]);
+}
 
-	offset = (y * sc->gc_width / 8) + (x / 8);
-	bit = 7 - (x % 8);
+static void
+vga_render_mode12(struct vga_softc *sc)
+{
+	uint8_t pixels;
+	int x, y, i;
+	uint32_t *data;
 
-	data = (((sc->vga_ram[offset + 0 * 64*KB] >> bit) & 0x1) << 0) |
-		(((sc->vga_ram[offset + 1 * 64*KB] >> bit) & 0x1) << 1) |
-		(((sc->vga_ram[offset + 2 * 64*KB] >> bit) & 0x1) << 2) |
-		(((sc->vga_ram[offset + 3 * 64*KB] >> bit) & 0x1) << 3);
-
-	data &= sc->vga_atc.atc_color_plane_enb;
-
-	if (sc->vga_atc.atc_mode & ATC_MC_IPS) {
-		idx = sc->vga_atc.atc_palette[data] & 0x0f;
-		idx |= sc->vga_atc.atc_color_select_45;
-	} else {
-		idx = sc->vga_atc.atc_palette[data];
+	data = sc->gc_image->data;
+	i = 0;
+	for (y = 0; y < sc->gc_height; y++) {
+		for (x = 0; x < sc->gc_width; x += 2) {  // half byte per pixel
+			pixels = sc->vga_ram[i];
+			*data++ = colors4bpp[pixels & 0xf];
+			*data++ = colors4bpp[(pixels >> 4) & 0xf];
+			i++;
+		}
 	}
-	idx |= sc->vga_atc.atc_color_select_67;
-
-	return (sc->vga_dac.dac_palette_rgb[idx]);
 }
 
 static void
 vga_render_graphics(struct vga_softc *sc)
 {
 	int x, y;
+	uint32_t *data;
+	uint8_t *src;
 
+	if (sc->vga_mode == 0x12) { // 640x480x16
+		vga_render_mode12(sc);
+		return;
+	}
+
+	// 320x200x32
+	data = sc->gc_image->data;
+	src = sc->vga_ram;
 	for (y = 0; y < sc->gc_height; y++) {
 		for (x = 0; x < sc->gc_width; x++) {
-			int offset;
-
-			offset = y * sc->gc_width + x;
-			sc->gc_image->data[offset] = vga_get_pixel(sc, x, y);
+			*data++ = vga_get_pixel(sc, *src);
+			src++;
 		}
 	}
 }
 
-static uint32_t
-vga_get_text_pixel(struct vga_softc *sc, int x, int y)
-{
-	int dots, offset, bit, font_offset;
-	uint8_t ch, attr, font;
-	uint8_t idx;
-
-	dots = sc->vga_seq.seq_cm_dots;
-
-	offset = 2 * sc->vga_crtc.crtc_start_addr;
-	offset += (y / 16 * sc->gc_width / dots) * 2 + (x / dots) * 2;
-
-	bit = 7 - (x % dots > 7 ? 7 : x % dots);
-
-	ch = sc->vga_ram[offset + 0 * 64*KB];
-	attr = sc->vga_ram[offset + 1 * 64*KB];
-
-	if (sc->vga_crtc.crtc_cursor_on &&
-	    (offset == (sc->vga_crtc.crtc_cursor_loc * 2)) &&
-	    ((y % 16) >= (sc->vga_crtc.crtc_cursor_start & CRTC_CS_CS)) &&
-	    ((y % 16) <= (sc->vga_crtc.crtc_cursor_end & CRTC_CE_CE))) {
-		idx = sc->vga_atc.atc_palette[attr & 0xf];
-		return (sc->vga_dac.dac_palette_rgb[idx]);
-	}
-
-	if ((sc->vga_seq.seq_mm & SEQ_MM_EM) &&
-	    sc->vga_seq.seq_cmap_pri_off != sc->vga_seq.seq_cmap_sec_off) {
-		if (attr & 0x8)
-			font_offset = sc->vga_seq.seq_cmap_pri_off +
-				(ch << 5) + y % 16;
-		else
-			font_offset = sc->vga_seq.seq_cmap_sec_off +
-				(ch << 5) + y % 16;
-		attr &= ~0x8;
-	} else {
-		font_offset = (ch << 5) + y % 16;
-	}
-
-	font = sc->vga_ram[font_offset + 2 * 64*KB];
-
-	if (font & (1 << bit))
-		idx = sc->vga_atc.atc_palette[attr & 0xf];
-	else
-		idx = sc->vga_atc.atc_palette[attr >> 4];
-
-	return (sc->vga_dac.dac_palette_rgb[idx]);
-}
-
+// Go through the current text page and 
 static void
 vga_render_text(struct vga_softc *sc)
 {
-	int x, y;
+	uint8 txtpage = microbios_get_textpage();
+	uint8 *txtbuf;
+	uint32_t *data;
 
-	for (y = 0; y < sc->gc_height; y++) {
-		for (x = 0; x < sc->gc_width; x++) {
-			int offset;
+	txtbuf = sc->txt_ram + txtpage*(80*25*2); // XXX row, col
 
-			offset = y * sc->gc_width + x;
-			sc->gc_image->data[offset] = vga_get_text_pixel(sc, x, y);
-		}
+	// TODO: compare with shadow buffer and see if there are differences;
+	// only render those changes
+
+	data = sc->gc_image->data;
+	for (int y = 0; y < 25; y++) {
+		data = glyph_render_line((uint16_t *)txtbuf, 80, data);
+		txtbuf += 2*80;
 	}
 }
 
 void
-vga_render(struct bhyvegc *gc, void *arg)
+vga_render(struct bhyvegc *gc)
 {
-	struct vga_softc *sc = arg;
+	struct vga_softc *sc = vgasc;
 
 	vga_check_size(gc, sc);
 
@@ -332,7 +370,7 @@ vga_render(struct bhyvegc *gc, void *arg)
 		return;
 	}
 
-	if (sc->vga_gc.gc_misc_gm && (sc->vga_atc.atc_mode & ATC_MC_GA))
+	if (sc->vga_mode != 0x03)
 		vga_render_graphics(sc);
 	else
 		vga_render_text(sc);
@@ -1178,6 +1216,7 @@ vga_port_out_handler(struct vmctx *ctx, int in, int port, int bytes,
 				sc->gc_image->vgamode = 1;
 			break;
 		case GC_MISCELLANEOUS:
+			printf("VGA: graphics misc mode... %d\n", val);
 			sc->vga_gc.gc_misc = val;
 			sc->vga_gc.gc_misc_gm = val & GC_MISC_GM;
 			sc->vga_gc.gc_misc_mm = (val & GC_MISC_MM) >>
@@ -1203,8 +1242,24 @@ vga_port_out_handler(struct vmctx *ctx, int in, int port, int bytes,
 	case GEN_INPUT_STS1_COLOR_PORT:
 		/* write to Feature Control Register */
 		break;
-//	case 0x3c3:
+//	case 0x3c3: /* video subsystem enable */
 //		break;
+	case 0x3d8: /* mode control */
+		printf("VGA mode control value %x\r\n", val);
+		/*
+		 * |7|6|5|4|3|2|1|0|  3D8 Mode Select Register
+		 *  | | | | | | | `---- 1 = 80x25 text, 0 = 40x25 text
+		 *  | | | | | | `----- 1 = 320x200 graphics, 0 = text
+		 *  | | | | | `------ 1 = B/W, 0 = color
+		 *  | | | | `------- 1 = enable video signal
+		 *  | | | `-------- 1 = 640x200 B/W graphics
+		 *  | | `--------- 1 = blink, 0 = no blink
+		 *  `------------ unused
+		 */
+		break;
+	case 0x3d9:
+		printf("VGA color select palette %x\r\n", val);
+		break;
 	default:
 		printf("XXX vga_port_out_handler() unhandled port 0x%x, val 0x%x\n", port, val);
 		//assert(0);
@@ -1265,12 +1320,40 @@ vga_port_handler(struct vmctx *ctx, int vcpu, int in, int port, int bytes,
 	return (error);
 }
 
+int
+vga_switchmode(uint8_t mode)
+{
+	// Modes: 0x03 80x25 text (default), 0x12 640x480x16, 0x13 320x200x256
+	switch (mode) {
+	case 0x03: // 80x25 text
+		vgasc->gc_width = 640;
+		vgasc->gc_height = 400;
+		vgasc->gc_bpp = 4;
+		break;
+	case 0x12:
+		vgasc->gc_width = 640;
+		vgasc->gc_height = 480;
+		vgasc->gc_bpp = 4;
+		break;
+	default:
+		vgasc->gc_width = 320;
+		vgasc->gc_height = 200;
+		vgasc->gc_bpp = 8;
+		return -1;
+	}
+	vgasc->vga_mode = mode;
+	return 0;
+}
+
 void *
-vga_init(int io_only)
+vga_init(struct vmctx *ctx)
 {
 	struct inout_port iop;
 	struct vga_softc *sc;
 	int port, error;
+
+	if (vga_font_file && glyph_load_psf(vga_font_file) != 0)
+		exit(1);
 
 	sc = calloc(1, sizeof(struct vga_softc));
 
@@ -1288,46 +1371,20 @@ vga_init(int io_only)
 	}
 
 	sc->gc_image = console_get_image();
+	sc->vga_ram = paddr_guest2host(ctx, 0xA0000, 64*KB);
+	sc->txt_ram = paddr_guest2host(ctx, 0xB8000, 32*KB);
 
-	/* only handle io ports; vga graphics is disabled */
-	if (io_only)
-		return(sc);
-
-	sc->mr.name = "VGA memory";
-	sc->mr.flags = MEM_F_RW;
-	sc->mr.base = 640 * KB;
-	sc->mr.size = 128 * KB;
-	sc->mr.handler = vga_mem_handler;
-	sc->mr.arg1 = sc;
-	error = register_mem_fallback(&sc->mr);
-	assert(error == 0);
-
-	sc->vga_ram = malloc(256 * KB);
+	sc->vga_shadow = malloc(256 * KB);
 	memset(sc->vga_ram, 0, 256 * KB);
+	sc->txt_shadow = malloc(8 * KB);
+	memset(sc->txt_shadow, 0, 8 * KB);
+	sc->vga_mode = 3;
 
-	{
-		static uint8_t palette[] = {
-			0x00,0x00,0x00, 0x00,0x00,0x2a, 0x00,0x2a,0x00, 0x00,0x2a,0x2a,
-			0x2a,0x00,0x00, 0x2a,0x00,0x2a, 0x2a,0x2a,0x00, 0x2a,0x2a,0x2a,
-			0x00,0x00,0x15, 0x00,0x00,0x3f, 0x00,0x2a,0x15, 0x00,0x2a,0x3f,
-			0x2a,0x00,0x15, 0x2a,0x00,0x3f, 0x2a,0x2a,0x15, 0x2a,0x2a,0x3f,
-		};
-		int i;
+	printf("VGA RAM mapped to %p, Text buf mapped to %p\r\n", sc->vga_ram, sc->txt_ram);
 
-		memcpy(sc->vga_dac.dac_palette, palette, 16 * 3 * sizeof (uint8_t));
-		for (i = 0; i < 16; i++) {
-			sc->vga_dac.dac_palette_rgb[i] =
-				((((sc->vga_dac.dac_palette[3*i + 0] << 2) |
-				   ((sc->vga_dac.dac_palette[3*i + 0] & 0x1) << 1) |
-				   (sc->vga_dac.dac_palette[3*i + 0] & 0x1)) << 16) |
-				 (((sc->vga_dac.dac_palette[3*i + 1] << 2) |
-				   ((sc->vga_dac.dac_palette[3*i + 1] & 0x1) << 1) |
-				   (sc->vga_dac.dac_palette[3*i + 1] & 0x1)) << 8) |
-				 (((sc->vga_dac.dac_palette[3*i + 2] << 2) |
-				   ((sc->vga_dac.dac_palette[3*i + 2] & 0x1) << 1) |
-				   (sc->vga_dac.dac_palette[3*i + 2] & 0x1)) << 0));
-		}
-	}
+	vga_initialize_palette(sc);
+	vgasc = sc;
+	vga_switchmode(3);
 
 	return (sc);
 }

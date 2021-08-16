@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/usr.sbin/bhyve/smbiostbl.c 359719 2020-04-07 23:17:44Z rgrimes $");
+__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 
@@ -802,7 +802,7 @@ smbios_ep_finalizer(struct smbios_entry_point *smbios_ep, uint16_t len,
 }
 
 int
-smbios_build(struct vmctx *ctx)
+smbios_build(struct vmctx *ctx, int smbios_base)
 {
 	struct smbios_entry_point	*smbios_ep;
 	uint16_t			n;
@@ -814,7 +814,10 @@ smbios_build(struct vmctx *ctx)
 	guest_lomem = vm_get_lowmem_size(ctx);
 	guest_himem = vm_get_highmem_size(ctx);
 
-	startaddr = paddr_guest2host(ctx, SMBIOS_BASE, SMBIOS_MAX_LENGTH);
+	if (smbios_base <= 0)
+		smbios_base = SMBIOS_BASE;
+
+	startaddr = paddr_guest2host(ctx, smbios_base, SMBIOS_MAX_LENGTH);
 	if (startaddr == NULL) {
 		EPRINTLN("smbios table requires mapped mem");
 		return (ENOMEM);
@@ -823,7 +826,7 @@ smbios_build(struct vmctx *ctx)
 	curaddr = startaddr;
 
 	smbios_ep = (struct smbios_entry_point *)curaddr;
-	smbios_ep_initializer(smbios_ep, SMBIOS_BASE +
+	smbios_ep_initializer(smbios_ep, smbios_base +
 	    sizeof(struct smbios_entry_point));
 	curaddr += sizeof(struct smbios_entry_point);
 	ststartaddr = curaddr;

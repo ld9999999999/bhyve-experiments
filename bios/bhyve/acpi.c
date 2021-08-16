@@ -25,7 +25,7 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD: head/usr.sbin/bhyve/acpi.c 359950 2020-04-15 02:00:17Z cem $
+ * $FreeBSD$
  */
 
 /*
@@ -55,7 +55,7 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/usr.sbin/bhyve/acpi.c 359950 2020-04-15 02:00:17Z cem $");
+__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/errno.h>
@@ -961,13 +961,14 @@ static struct {
 };
 
 int
-acpi_build(struct vmctx *ctx, int ncpu)
+acpi_build(struct vmctx *ctx, int ncpu, int acpi_base)
 {
 	int err;
 	int i;
 
 	basl_ncpu = ncpu;
-
+	if (acpi_base > 0)
+		basl_acpi_base = (uint32_t)acpi_base;
 	err = vm_get_hpet_capabilities(ctx, &hpet_capabilities);
 	if (err != 0)
 		return (err);

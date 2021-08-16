@@ -25,13 +25,14 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD: head/usr.sbin/bhyve/post.c 326276 2017-11-27 15:37:16Z pfg $
+ * $FreeBSD$
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/usr.sbin/bhyve/post.c 326276 2017-11-27 15:37:16Z pfg $");
+__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
+#include <stdio.h>
 
 #include <assert.h>
 
@@ -42,10 +43,12 @@ static int
 post_data_handler(struct vmctx *ctx, int vcpu, int in, int port, int bytes,
 		  uint32_t *eax, void *arg)
 {
-	assert(in == 1);
-
 	if (bytes != 1)
 		return (-1);
+
+	if (!in) {
+		fprintf(stderr, "POST: 0x%02x\n", *eax & 0xff);
+	}
 
 	*eax = 0xff;		/* return some garbage */
 	return (0);
@@ -53,3 +56,5 @@ post_data_handler(struct vmctx *ctx, int vcpu, int in, int port, int bytes,
 
 INOUT_PORT(post, 0x84, IOPORT_F_IN, post_data_handler);
 SYSRES_IO(0x84, 1);
+INOUT_PORT(post80, 0x80, IOPORT_F_OUT, post_data_handler);
+SYSRES_IO(0x80, 1);

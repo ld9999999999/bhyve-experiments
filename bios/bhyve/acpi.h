@@ -25,7 +25,7 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD: head/usr.sbin/bhyve/acpi.h 359950 2020-04-15 02:00:17Z cem $
+ * $FreeBSD$
  */
 
 #ifndef _ACPI_H_
@@ -53,7 +53,7 @@
 
 struct vmctx;
 
-int	acpi_build(struct vmctx *ctx, int ncpu);
+int	acpi_build(struct vmctx *ctx, int ncpu, int acpi_base);
 void	acpi_raise_gpe(struct vmctx *ctx, unsigned bit);
 void	dsdt_line(const char *fmt, ...);
 void	dsdt_fixed_ioport(uint16_t iobase, uint16_t length);

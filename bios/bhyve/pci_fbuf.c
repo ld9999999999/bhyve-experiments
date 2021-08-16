@@ -25,11 +25,11 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD: head/usr.sbin/bhyve/pci_fbuf.c 360648 2020-05-05 00:02:04Z jhb $
+ * $FreeBSD$
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/usr.sbin/bhyve/pci_fbuf.c 360648 2020-05-05 00:02:04Z jhb $");
+__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <sys/mman.h>
@@ -107,7 +107,6 @@ struct pci_fbuf_softc {
 	char      *fb_base;
 	uint16_t  gc_width;
 	uint16_t  gc_height;
-	void      *vgasc;
 	struct bhyvegc_image *gc_image;
 };
 
@@ -324,7 +323,7 @@ done:
 }
 
 
-extern void vga_render(struct bhyvegc *gc, void *arg);
+extern void vga_render(struct bhyvegc *gc);
 
 void
 pci_fbuf_render(struct bhyvegc *gc, void *arg)
@@ -333,11 +332,12 @@ pci_fbuf_render(struct bhyvegc *gc, void *arg)
 
 	sc = arg;
 
+vga_render(gc); return;
 	if (sc->vga_full && sc->gc_image->vgamode) {
 		/* TODO: mode switching to vga and vesa should use the special
 		 *      EFI-bhyve protocol port.
 		 */
-		vga_render(gc, sc->vgasc);
+		vga_render(gc);
 		return;
 	}
 	if (sc->gc_width != sc->memregs.width ||
@@ -387,19 +387,13 @@ pci_fbuf_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	sc->memregs.depth  = 32;
 
 	sc->vga_enabled = 1;
-	sc->vga_full = 0;
+	sc->vga_full = 1;
 
 	sc->fsc_pi = pi;
 
 	error = pci_fbuf_parse_opts(sc, opts);
 	if (error != 0)
 		goto done;
-
-	/* XXX until VGA rendering is enabled */
-	if (sc->vga_full != 0) {
-		EPRINTLN("pci_fbuf: VGA rendering not enabled");
-		goto done;
-	}
 
 	sc->fb_base = vm_create_devmem(ctx, VM_FRAMEBUFFER, "framebuffer", FB_SIZE);
 	if (sc->fb_base == MAP_FAILED) {
@@ -422,12 +416,14 @@ pci_fbuf_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 		goto done;
 	}
 
+printf("memregs.width: %u, height: %u\r\n", sc->memregs.width, sc->memregs.height);
 	console_init(sc->memregs.width, sc->memregs.height, sc->fb_base);
 	console_fb_register(pci_fbuf_render, sc);
 
-	if (sc->vga_enabled)
-		sc->vgasc = vga_init(!sc->vga_full);
+	vga_init(ctx);
+
 	sc->gc_image = console_get_image();
+	sc->gc_image->vgamode = 1;
 
 	fbuf_sc = sc;
 

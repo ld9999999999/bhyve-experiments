@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/usr.sbin/bhyve/bhyvegc.c 335027 2018-06-13 04:00:21Z araujo $");
+__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 
@@ -53,7 +53,7 @@ bhyvegc_init(int width, int height, void *fbaddr)
 	gc_image = calloc(1, sizeof(struct bhyvegc_image));
 	gc_image->width = width;
 	gc_image->height = height;
-	if (fbaddr) {
+	if (/*fbaddr*/0) {
 		gc_image->data = fbaddr;
 		gc->raw = 1;
 	} else {

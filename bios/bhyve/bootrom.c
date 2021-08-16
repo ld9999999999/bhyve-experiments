@@ -27,11 +27,13 @@
  */
 
 #include <sys/param.h>
-__FBSDID("$FreeBSD: head/usr.sbin/bhyve/bootrom.c 359949 2020-04-15 01:58:51Z cem $");
+__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+
+#include <stdlib.h>
 
 #include <machine/vmm.h>
 
@@ -173,6 +175,21 @@ bootrom_loadrom(struct vmctx *ctx, const char *romfile)
 			goto done;
 		}
 	}
+
+	/* Shadow the first 64k into <1MB memory if this is a small ROM */
+	if (sbuf.st_size >= (64*1024)) {
+		ptr = paddr_guest2host(ctx, 0xF0000, 64*1024);
+		printf("BHYVE: Copying ROM to 0xF0000 - GPA: %p\n", ptr);
+		lseek(fd, 0, SEEK_SET);
+		for (i = 0; i < 64/4; i++) {
+			rlen = read(fd, ptr + i*PAGE_SIZE, PAGE_SIZE);
+			if (rlen != PAGE_SIZE) {
+				printf("Read into BIOS area failed, bytes %ld\n", rlen);
+				goto done;
+			}
+		}
+	}
+
 	rv = 0;
 done:
 	if (fd >= 0)

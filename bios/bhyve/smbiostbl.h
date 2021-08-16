@@ -25,7 +25,7 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD: head/usr.sbin/bhyve/smbiostbl.h 326276 2017-11-27 15:37:16Z pfg $
+ * $FreeBSD$
  */
 
 #ifndef _SMBIOSTBL_H_
@@ -33,6 +33,6 @@
 
 struct vmctx;
 
-int	smbios_build(struct vmctx *ctx);
+int	smbios_build(struct vmctx *ctx, int smbios_base);
 
 #endif /* _SMBIOSTBL_H_ */

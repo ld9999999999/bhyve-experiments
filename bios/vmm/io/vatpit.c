@@ -132,8 +132,23 @@ vatpit_get_out(struct vatpit *vatpit, int channel)
 
 	switch (c->mode) {
 	case TIMER_INTTC:
+		/*
+		 * For mode 0, see if the elapsed time is grater
+		 * than the initial value - this results in the
+		 * output pin being set to 1 in the status byte.
+		 */
 		delta_ticks = vatpit_delta_ticks(vatpit, c);
 		out = (delta_ticks >= c->initial);
+		break;
+	case TIMER_SQWAVE:
+		/*
+		 * out is high in the first half of the duty cycle. First,
+		 * convert the absolute number of ticks back into the offset
+		 * within an interval, and then see if that is < 1/2 the
+		 * initial count.
+		 */
+		delta_ticks = vatpit_delta_ticks(vatpit, c);
+		out = (delta_ticks % c->initial) < (c->initial / 2);
 		break;
 	default:
 		out = 0;
@@ -167,7 +182,7 @@ vatpit_callout_handler(void *a)
 
 	callout_deactivate(callout);
 
-	if (c->mode == TIMER_RATEGEN) {
+	if (c->mode == TIMER_RATEGEN || c->mode == TIMER_SQWAVE) {
 		pit_timer_start_cntr0(vatpit);
 	}
 
@@ -235,7 +250,17 @@ pit_update_counter(struct vatpit *vatpit, struct channel *c, bool latch)
 	}
 
 	delta_ticks = vatpit_delta_ticks(vatpit, c);
-	lval = c->initial - delta_ticks % c->initial;
+	if (c->mode == TIMER_SQWAVE) {
+		/*
+		 * In mode 6, the clock is decremented at twice the rate
+		 * so will be reloaded halfway during the period.
+		 * Also, an odd initial value for the period will
+		 * be converted to even when being read out.
+		 */
+		delta_ticks *= 2;
+		lval = (c->initial - delta_ticks % c->initial) & ~0x1;
+	} else
+		lval = c->initial - delta_ticks % c->initial;
 
 	if (latch) {
 		c->olbyte = 2;
@@ -263,12 +288,8 @@ pit_readback1(struct vatpit *vatpit, int channel, uint8_t cmd)
 
 	if (!(cmd & TIMER_RB_LSTATUS) && !c->slatched) {
 		c->slatched = true;
-		/*
-		 * For mode 0, see if the elapsed time is greater
-		 * than the initial value - this results in the
-		 * output pin being set to 1 in the status byte.
-		 */
-		if (c->mode == TIMER_INTTC && vatpit_get_out(vatpit, channel))
+		if ((c->mode == TIMER_INTTC || c->mode == TIMER_SQWAVE) &&
+		    vatpit_get_out(vatpit, channel))
 			c->status |= TIMER_STS_OUT;
 		else
 			c->status &= ~TIMER_STS_OUT;

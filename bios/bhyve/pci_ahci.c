@@ -26,11 +26,11 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD: head/usr.sbin/bhyve/pci_ahci.c 360648 2020-05-05 00:02:04Z jhb $
+ * $FreeBSD$
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/usr.sbin/bhyve/pci_ahci.c 360648 2020-05-05 00:02:04Z jhb $");
+__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/linker_set.h>
@@ -61,6 +61,7 @@ __FBSDID("$FreeBSD: head/usr.sbin/bhyve/pci_ahci.c 360648 2020-05-05 00:02:04Z j
 #include "pci_emul.h"
 #include "ahci.h"
 #include "block_if.h"
+#include "microbios.h"
 
 #define	DEF_PORTS	6	/* Intel ICH8 AHCI supports 6 ports */
 #define	MAX_PORTS	32	/* AHCI supports 32 ports */
@@ -224,6 +225,28 @@ static inline void lba_to_msf(uint8_t *buf, int lba)
 	buf[0] = (lba / 75) / 60;
 	buf[1] = (lba / 75) % 60;
 	buf[2] = lba % 75;
+}
+
+static int
+ahci_md_write(void *arg, uint64_t lba, void *buf, uint64_t sectors)
+{
+	struct ahci_port *p = arg;
+
+	return blockif_write_sync(p->bctx, buf, sectors, lba);
+}
+
+static int
+ahci_md_read(void *arg, uint64_t lba, void *buf, uint64_t sectors)
+{
+	struct ahci_port *p = arg;
+
+	return blockif_read_sync(p->bctx, buf, sectors, lba);
+}
+
+struct blockif_ctxt *
+ahci_md_getblkif(void *p)
+{
+	return (struct blockif_ctxt *)((struct ahci_port *)p)->bctx;
 }
 
 /*
@@ -2319,6 +2342,7 @@ pci_ahci_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts, int atapi)
 	MD5_CTX mdctx;
 	u_char digest[16];
 	char *next, *next2;
+	microbios_disk *mddisk;
 
 	ret = 0;
 
@@ -2373,6 +2397,14 @@ pci_ahci_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts, int atapi)
 		sc->port[p].pr_sc = sc;
 		sc->port[p].port = p;
 		sc->port[p].atapi = atapi;
+
+		mddisk = calloc(1, sizeof(microbios_disk));
+		mddisk->disk_type = MD_DISK_HDD;
+		mddisk->sc = &sc->port[p];
+		mddisk->md_write = ahci_md_write;
+		mddisk->md_read = ahci_md_read;
+		mddisk->md_getblkif = ahci_md_getblkif;
+		microbios_register_disk(mddisk);
 
 		/*
 		 * Create an identifier for the backing file.

@@ -28,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/usr.sbin/bhyve/atkbdc.c 360648 2020-05-05 00:02:04Z jhb $");
+__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 
@@ -314,8 +314,9 @@ atkbdc_data_handler(struct vmctx *ctx, int vcpu, int in, int port, int bytes,
 	uint8_t buf;
 	int retval;
 
-	if (bytes != 1)
+	if (bytes > 2)
 		return (-1);
+
 	sc = arg;
 	retval = 0;
 
@@ -537,7 +538,7 @@ atkbdc_init(struct vmctx *ctx)
 	bzero(&iop, sizeof(struct inout_port));
 	iop.name = "atkdbc";
 	iop.port = KBD_DATA_PORT;
-	iop.size = 1;
+	iop.size = 2;
 	iop.flags = IOPORT_F_INOUT;
 	iop.handler = atkbdc_data_handler;
 	iop.arg = sc;

@@ -25,11 +25,11 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD: head/usr.sbin/bhyve/bhyverun.c 361082 2020-05-15 15:54:22Z cem $
+ * $FreeBSD$
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/usr.sbin/bhyve/bhyverun.c 361082 2020-05-15 15:54:22Z cem $");
+__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #ifndef WITHOUT_CAPSICUM
@@ -92,7 +92,6 @@ __FBSDID("$FreeBSD: head/usr.sbin/bhyve/bhyverun.c 361082 2020-05-15 15:54:22Z c
 #include "fwctl.h"
 #include "gdb.h"
 #include "ioapic.h"
-#include "kernemu_dev.h"
 #include "mem.h"
 #include "mevent.h"
 #include "mptbl.h"
@@ -107,6 +106,9 @@ __FBSDID("$FreeBSD: head/usr.sbin/bhyve/bhyverun.c 361082 2020-05-15 15:54:22Z c
 #include "spinup_ap.h"
 #include "rtc.h"
 #include "vmgenc.h"
+#include "microbios.h"
+#include "memdisk.h"
+#include "vga.h"
 
 #define GUEST_NIO_PORT		0x488	/* guest upcalls via i/o port */
 
@@ -238,7 +240,7 @@ usage(int code)
 		"Usage: %s [-abehuwxACHPSWY]\n"
 		"       %*s [-c [[cpus=]numcpus][,sockets=n][,cores=n][,threads=n]]\n"
 		"       %*s [-g <gdb port>] [-l <lpc>]\n"
-		"       %*s [-m mem] [-p vcpu:hostcpu] [-s <pci>] [-U uuid] <vm>\n"
+		"       %*s [-m mem] [-p vcpu:hostcpu] [-s <pci>] [-U uuid] [-V psf] <vm>\n"
 		"       -a: local apic is in xAPIC mode (deprecated)\n"
 		"       -A: create ACPI tables\n"
 		"       -c: number of cpus and/or topology specification\n"
@@ -254,10 +256,12 @@ usage(int code)
 #endif
 		"       -p: pin 'vcpu' to 'hostcpu'\n"
 		"       -P: vmexit from the guest on pause\n"
+		"       -o: overrides (acpi_base, smbios_base)\n"
 		"       -s: <slot,driver,configinfo> PCI slot config\n"
 		"       -S: guest memory cannot be swapped\n"
 		"       -u: RTC keeps UTC time\n"
 		"       -U: uuid\n"
+		"       -V: VGA psf font file\n"
 		"       -w: ignore unimplemented MSRs\n"
 		"       -W: force virtio to use single-vector MSI\n"
 		"       -x: local apic is in x2APIC mode\n"
@@ -764,7 +768,7 @@ vmexit_inst_emul(struct vmctx *ctx, struct vm_exit *vmexit, int *pvcpu)
 		fprintf(stderr, "Failed to emulate instruction sequence [ ");
 		for (i = 0; i < vie->num_valid; i++)
 			fprintf(stderr, "%02x", vie->inst[i]);
-		FPRINTLN(stderr, " ] at 0x%lx", vmexit->rip);
+		FPRINTLN(stderr, " ] at 0x%lx GPA 0x%lx", vmexit->rip, vmexit->u.inst_emul.gpa);
 		return (VMEXIT_ABORT);
 	}
 
@@ -1072,6 +1076,7 @@ main(int argc, char *argv[])
 
 	restore_file = NULL;
 #endif
+	int acpi_base, smbios_base;
 
 	bvmcons = 0;
 	progname = basename(argv[0]);
@@ -1084,11 +1089,13 @@ main(int argc, char *argv[])
 	mptgen = 1;
 	rtc_localtime = 1;
 	memflags = 0;
+	acpi_base = 0;
+	smbios_base = 0;
 
 #ifdef BHYVE_SNAPSHOT
-	optstr = "abehuwxACHIPSWYp:g:G:c:s:m:l:U:r:";
+	optstr = "abehuwxACHIPSWYp:g:G:c:o:s:m:M:l:U:V:r:";
 #else
-	optstr = "abehuwxACHIPSWYp:g:G:c:s:m:l:U:";
+	optstr = "abehuwxACHIPSWYp:g:G:c:o:s:m:M:l:U:V:";
 #endif
 	while ((c = getopt(argc, argv, optstr)) != -1) {
 		switch (c) {
@@ -1156,6 +1163,13 @@ main(int argc, char *argv[])
 			if (error)
 				errx(EX_USAGE, "invalid memsize '%s'", optarg);
 			break;
+		case 'M':
+			error = md_create(optarg);
+			if (error < 0) {
+				perror("md_create");
+				exit(4);
+                        }
+			break;
 		case 'H':
 			guest_vmexit_on_hlt = 1;
 			break;
@@ -1174,11 +1188,40 @@ main(int argc, char *argv[])
 		case 'e':
 			strictio = 1;
 			break;
+		case 'o': {
+			/* parse overrides */
+			char *str, *cpy, *key;
+			str = cpy = strdup(optarg);
+			key = strsep(&str, "=");
+			if (key != NULL) {
+				if (strcasecmp(key, "acpi_base") == 0) {
+		                        acpi_base = (int)strtol(str, NULL, 16);
+					if (acpi_base <= 0) {
+						fprintf(stderr, "Invalid %s\n", key);
+						exit(1);
+					}
+				} else if (strcasecmp(key, "smbios_base") == 0) {
+					smbios_base = (int)strtol(str, NULL, 16);
+					if (smbios_base <= 0) {
+						fprintf(stderr, "Invalid %s\n", key);
+						exit(1);
+					}
+				} else {
+					fprintf(stderr, "Unknown override key %s\n", key);
+					exit(1);
+				}
+			}
+			free(cpy);
+			break;
+		}
 		case 'u':
 			rtc_localtime = 0;
 			break;
 		case 'U':
 			guest_uuid_str = optarg;
+			break;
+		case 'V':
+			vga_font_file = optarg;
 			break;
 		case 'w':
 			strictmsr = 0;
@@ -1230,6 +1273,7 @@ main(int argc, char *argv[])
 
 	vmname = argv[0];
 #endif
+
 	ctx = do_open(vmname);
 
 #ifdef BHYVE_SNAPSHOT
@@ -1269,7 +1313,6 @@ main(int argc, char *argv[])
 
 	init_mem();
 	init_inout();
-	kernemu_dev_init();
 	init_bootrom(ctx);
 	atkbdc_init(ctx);
 	pci_irq_init(ctx);
@@ -1360,11 +1403,11 @@ main(int argc, char *argv[])
 		}
 	}
 
-	error = smbios_build(ctx);
+	error = smbios_build(ctx, smbios_base);
 	assert(error == 0);
 
 	if (acpi) {
-		error = acpi_build(ctx, guest_ncpus);
+		error = acpi_build(ctx, guest_ncpus, acpi_base);
 		assert(error == 0);
 	}
 
@@ -1420,6 +1463,10 @@ main(int argc, char *argv[])
 		}
 	}
 #endif
+
+	// Initialze shared BIOS information
+	if (lpc_bootrom())
+		microbios_init(ctx);
 
 	/*
 	 * Head off to the main event dispatch loop

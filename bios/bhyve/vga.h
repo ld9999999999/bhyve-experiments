@@ -25,7 +25,7 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD: head/usr.sbin/bhyve/vga.h 335104 2018-06-14 01:34:53Z araujo $
+ * $FreeBSD$
  */
 
 #ifndef _VGA_H_
@@ -157,6 +157,15 @@
 #define	DAC_IDX_WR_PORT			0x3c8
 #define	DAC_DATA_PORT			0x3c9
 
-void	*vga_init(int io_only);
+struct vmctx;
+extern char *vga_font_file;
+
+void *vga_init(struct vmctx *ctx);
+int  vga_switchmode(uint8_t mode);
+
+
+uint32_t *glyph_render_line(uint16_t *row, uint32_t cols, uint32_t *output);
+int  glyph_load_psf(char *psffile);
+
 
 #endif /* _VGA_H_ */

@@ -26,11 +26,11 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD: head/usr.sbin/bhyve/block_if.c 360648 2020-05-05 00:02:04Z jhb $
+ * $FreeBSD$
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/usr.sbin/bhyve/block_if.c 360648 2020-05-05 00:02:04Z jhb $");
+__FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #ifndef WITHOUT_CAPSICUM
@@ -658,6 +658,19 @@ blockif_read(struct blockif_ctxt *bc, struct blockif_req *breq)
 }
 
 int
+blockif_write_sync(struct blockif_ctxt *bc, void *buf, size_t sectors, off_t lba)
+{
+	return pwrite(bc->bc_fd, buf, sectors * bc->bc_sectsz, lba * bc->bc_sectsz);
+}
+
+int
+blockif_read_sync(struct blockif_ctxt *bc, void *buf, size_t sectors, off_t lba)
+{
+	return pread(bc->bc_fd, buf, sectors * bc->bc_sectsz, lba * bc->bc_sectsz);
+}
+
+
+int
 blockif_write(struct blockif_ctxt *bc, struct blockif_req *breq)
 {
 
@@ -805,13 +818,21 @@ blockif_chs(struct blockif_ctxt *bc, uint16_t *c, uint8_t *h, uint8_t *s)
 
 	sectors = bc->bc_size / bc->bc_sectsz;
 
+	/* Floppy size CHS */
+	if (bc->bc_size <= (2880*512)) {
+		secpt = 18;
+		hcyl = sectors / secpt;
+		heads = 2;
+		goto calc;
+	}
+
 	/* Clamp the size to the largest possible with CHS */
 	if (sectors > 65535UL*16*255)
 		sectors = 65535UL*16*255;
 
 	if (sectors >= 65536UL*16*63) {
-		secpt = 255;
-		heads = 16;
+		secpt = 63;
+		heads = 32;
 		hcyl = sectors / secpt;
 	} else {
 		secpt = 17;
@@ -828,11 +849,12 @@ blockif_chs(struct blockif_ctxt *bc, uint16_t *c, uint8_t *h, uint8_t *s)
 		}
 		if (hcyl >= (heads * 1024)) {
 			secpt = 63;
-			heads = 16;
+			heads = /* 16 */32;
 			hcyl = sectors / secpt;
 		}
 	}
 
+calc:
 	*c = hcyl / heads;
 	*h = heads;
 	*s = secpt;

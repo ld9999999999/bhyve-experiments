@@ -1,8 +1,8 @@
 #
-# $FreeBSD: head/usr.sbin/bhyve/Makefile 361082 2020-05-15 15:54:22Z cem $
+# $FreeBSD: head/usr.sbin/bhyve/Makefile 360958 2020-05-12 11:18:14Z afedorov $
 #
 
-.include <src.opts.mk>
+.include </usr/src/share/mk/src.opts.mk>
 CFLAGS+=-I${SRCTOP}/sys
 .PATH:  ${SRCTOP}/sys/cam/ctl
 
@@ -31,9 +31,9 @@ SRCS=	\
 	hda_codec.c		\
 	inout.c			\
 	ioapic.c		\
-	kernemu_dev.c		\
 	mem.c			\
 	mevent.c		\
+	microbios.c		\
 	mptbl.c			\
 	net_backends.c		\
 	net_utils.c		\
@@ -71,13 +71,12 @@ SRCS=	\
 	vmgenc.c		\
 	xmsr.c			\
 	spinup_ap.c		\
-	iov.c
+	iov.c \
+	textcons.c glyphs.c memdisk.c
 
 .if ${MK_BHYVE_SNAPSHOT} != "no"
 SRCS+=	snapshot.c
 .endif
-
-CFLAGS.kernemu_dev.c+=	-I${SRCTOP}/sys/amd64
 
 .PATH:  ${BHYVE_SYSDIR}/sys/amd64/vmm
 SRCS+=	vmm_instruction_emul.c
@@ -106,6 +105,8 @@ LIBADD+=	crypto
 CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/e1000
 CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/mii
 CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/usb/controller
+CFLAGS+= -DWITHOUT_CAPSICUM
+MK_BHYVE_SNAPSHOT= no
 .if ${MK_BHYVE_SNAPSHOT} != "no"
 CFLAGS+= -I${SRCTOP}/contrib/libucl/include
 
