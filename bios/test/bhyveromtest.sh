@@ -4,8 +4,9 @@ BHYVE=../bhyve/bhyve
 VM=biosvm
 ROM=$PWD/../microboot/microboot.bin
 
-DISK=$PWD/freebsd-mini.img
-#DISK=$PWD/MS-DOS-flat.vmdk
+#DISK=$PWD/freebsd-mini.img
+DISK=$PWD/MS-DOS-flat.vmdk
+DISK=$PWD/biostest/biostest.bin
 
 bhyvectl --destroy --vm=$VM
 

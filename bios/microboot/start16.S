@@ -611,6 +611,8 @@ int1c:
 	//jmp     int_swcommon
 
 int_bhyvebios: // bhyve bios hypercall
+	cli
+
 	// Save EAX, EDX to bios_vars (eax and edx used for I/O out)
 	push    %bp
 	mov	%sp, %bp
@@ -619,16 +621,16 @@ int_bhyvebios: // bhyve bios hypercall
 	push    %ds
 	mov	$BIOS_VARS_SEG, %bx
 	mov	%bx, %ds
-	movl    %eax, %ds:4
-	movl    %edx, %ds:8
+	movl    %eax, %ds:BHYVE_VARS_EAX
+	movl    %edx, %ds:BHYVE_VARS_EDX
 	movw    %ss:8(%bp), %ax
-	movw    %ax, %ds:2           // flags
+	movw    %ax, %ds:BHYVE_VARS_FLAGS
 	pop     %ds
 	popl	%ebx
 	popl	%eax
 	pop     %bp
 
-	pushw	%ax
+	pushw	%ax   // intr_vec --> %ax
 	popl	%eax  // clear stack. Set EAX = ax << 16 | int-vec;
 
 	mov	$BHYVE_IO_PORT, %dx
@@ -646,6 +648,7 @@ int_bhyvebios: // bhyve bios hypercall
 	pop     %ds
 	pop	%ax
 	pop	%bp
+
 	iret
 
 int_swcommon:

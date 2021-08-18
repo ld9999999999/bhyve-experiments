@@ -510,7 +510,7 @@ handle_int13(struct vmctx *ctx, struct inth_regs *regs, int vcpu) {
 		}
 
 		// floppy support not yet
-		if (REG_LOBYTE(regs->edx) < 0x80) {
+		if (REG_LOBYTE(regs->edx) < 0x80 || (REG_LOBYTE(regs->edx) & 0x7f) >= num_mddisks) {
 			SET_CF(regs->eflags);
 			goto eflags_err;
 		}
@@ -528,12 +528,13 @@ handle_int13(struct vmctx *ctx, struct inth_regs *regs, int vcpu) {
 		} else {
 			addr = dp->buf_laddr_low | ((uint64_t)dp->buf_laddr_high << 32);
 		}
-		void *gpa = paddr_guest2host(ctx, addr, size);
 #if 0
 		printf("(BHYVE) DISK-EXTIO [%s] sectors %u, lba %lx, [addr:%lx] (es %x, bx %x, dx %x)\r\n",
 			is_read ? "RD" : "WR",
-			sectors, lba, addr, es, ebx, edx);
+			sectors, lba, addr, regs->es, regs->ebx, regs->edx);
 #endif
+
+		void *gpa = paddr_guest2host(ctx, addr, size);
 
 		if (is_read) {
 			if (disk->md_read(disk->sc, lba, gpa, sectors) < 0) {
