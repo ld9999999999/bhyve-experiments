@@ -105,6 +105,13 @@ typedef struct {
 	uint16  flags;
 	uint32  eax;
 	uint32  edx;
+	uint32  esp;
+	uint16  ss;
+	uint16  ds;
+	uint16  es;
+	uint16  gdtr_limit;
+	uint32  gdtr_base;
+	uint64  gdtr_copy;
 } BIOS_VARS;
 
 

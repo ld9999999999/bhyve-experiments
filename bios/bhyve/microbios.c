@@ -87,6 +87,14 @@ microbios_init(struct vmctx *ctx)
 	textcons_init("127.0.0.1", 50001, vgatxt);
 }
 
+#pragma pack(1)
+struct e820_entry {
+	uint64_t addr;
+	uint64_t size;
+	uint32_t type;
+};
+#pragma pack()
+
 static int e820_entries = 0;
 static uint8_t *e820_tbl = NULL;
 
@@ -766,6 +774,7 @@ handle_int15(struct vmctx *ctx, struct inth_regs *regs, int vcpu) {
 		uint32_t continuation;
 		uint64_t gbufaddr;
 		void *bp;
+		struct e820_entry *ee;
 
 		if (REG_LOBYTE(regs->eax) == 0x01) {
 			uint32_t memsize = vm_get_lowmem_size(ctx);
@@ -781,7 +790,7 @@ handle_int15(struct vmctx *ctx, struct inth_regs *regs, int vcpu) {
 			break;
 		} else if (REG_LOBYTE(regs->eax) != 0x20 ||        // only support e820 here
 		           regs->edx != 0x534D4150 ||              // missing signature
-		           (regs->ecx & 0xffff) < 20 ||            // len of buffer too small
+		           (regs->ecx & 0xffff) < sizeof(*ee) ||   // len of buffer too small
 		           (regs->ebx & 0xffff) >= e820_entries) { // continuation invalid
 
 			printf("(BHYVE) int15-e820 (invalid eax 0x%x) sig 0x%x, buflen %x, cont %u\r\n",
@@ -797,13 +806,15 @@ handle_int15(struct vmctx *ctx, struct inth_regs *regs, int vcpu) {
 		       gbufaddr, regs->edx, regs->ecx, regs->ebx);
 
 		continuation = regs->ebx & 0xffff;
-		bp = paddr_guest2host(ctx, gbufaddr, 20);
-		memcpy(bp, e820_tbl + (20 * continuation), 20);
+		bp = paddr_guest2host(ctx, gbufaddr, sizeof(*ee));
+		ee = (struct e820_entry *)(e820_tbl + (sizeof(*ee) * continuation));
+		memcpy(bp, ee, 20);
+		printf("     >>> address 0x%lx, size 0x%lx, type 0x%x\r\n", ee->addr, ee->size, ee->type);
 
 		CLEAR_CF(regs->eflags);
 		regs->ebx = (continuation + 1) % e820_entries;
 		regs->eax = 0x534D4150;
-		regs->ecx = 20;
+		regs->ecx = sizeof(*ee);
 		regs->edx = 0;
 		SETREG(ctx, vcpu, VM_REG_GUEST_RBX, regs->ebx);
 		SETREG(ctx, vcpu, VM_REG_GUEST_RCX, regs->ecx);

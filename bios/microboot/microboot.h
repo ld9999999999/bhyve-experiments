@@ -28,6 +28,7 @@
  *     0xF7000 - ROM code
  */
 #define BIOS_VARS_SEG     0xF500
+#define BIOS_VARS_ADDR    0xF5000
 #define E820_INFO_BLOCK   0xF5500
 
 /* Start of ROM code offset in SEG_BIOS */
@@ -58,6 +59,20 @@
 #define BMCD_POWER_OFF        0xff
 
 
+// Offsets into BIOS_VARS
+#define BHYVE_VARS_CFG_TBL    0
+#define BHYVE_VARS_FLAGS      2
+#define BHYVE_VARS_EAX        4
+#define BHYVE_VARS_EDX        8
+#define BHYVE_VARS_ESP        12
+#define BHYVE_VARS_SS         16
+#define BHYVE_VARS_DS         18
+#define BHYVE_VARS_ES         20
+#define BHYVE_VARS_GDTR_LIM   22
+#define BHYVE_VARS_GDTR_BASE  24
+#define BHYVE_VARS_GDT_COPY   28
+
+
 #ifndef __ASM__
 
 typedef unsigned int   uint32;
@@ -68,6 +83,21 @@ typedef unsigned char  uint8;
 #include "bios.h"
 
 #pragma pack(1)
+typedef struct bios_vars {
+	uint16  bios_config_tbl_offset;       // 0
+	uint16  flags;                        // 2
+	uint32  eax;                          // 4
+	uint32  edx;                          // 8
+
+	// Saved GDTR and segment registers
+	uint32  saved_esp;                    // 12
+	uint16  saved_ss;                     // 16
+	uint16  saved_ds;                     // 18
+	uint16  saved_es;                     // 20
+	uint16  gdtr_limit;                   // 22
+	uint32  gdtr_base;                    // 24
+} bios_vars;
+
 struct bhyve_cmd {
 	uint16 seq;
 	uint16 command;           // command to issue

@@ -24,13 +24,13 @@
 	pushal
 	push  %es
 	push  %ds
-	pushl %esp
 	push  %ss
+	pushl %esp
 	.endm
 
 	.macro POPREGS
+	popl %eax // esp
 	pop  %ax  // ss
-	popl %eax
 	pop  %ds
 	pop  %es
 	popal
@@ -43,6 +43,7 @@
 	 * absolute %ss:%esp locations as well to match the %ds:offsets.
 	 */
 	.macro SET_SP_CFUNC
+	PUSHREGS
 	xor      %eax, %eax
 	mov      %ss, %ax
 	shl      $4, %eax
@@ -58,28 +59,17 @@
 	 * popping registers. SS and ESP were saved on the stack.
 	 */
 	.macro RESTORE_SP_CFUNC
-	movw	 %ss:(%esp), %bx   // ss
-	movl	 %ss:2(%esp), %eax // esp
-	sub      $6, %eax          // value of esp pushed was higher in the stack
-	and      $0xffff, %eax
+	movw	 %ss:4(%esp), %bx  // ss
+	movl	 %ss:(%esp), %eax  // esp
+	sub      $4, %eax          // value of esp pushed was higher in the stack
 	mov      %eax, %esp
 	mov      %bx, %ss
+	POPREGS
 	.endm
-
 
 	// Long call to C function (pushes 16bit CS, 32bit EIP)
 	.macro call_c fn
 	calll	\fn
-	.endm
-
-	.macro INTH_PUSHREGS
-	PUSHREGS
-	SET_SP_CFUNC // also change %ds, %es, etc to 0x00
-	.endm
-
-	.macro INTH_POPREGS
-	RESTORE_SP_CFUNC
-	POPREGS
 	.endm
 
         /*
@@ -87,13 +77,35 @@
          * Requires setting general seg registers to 0
          */      
         .macro SET_SP_CFUNC_NOARGS
-        xor      %eax, %eax
-        mov      %ax, %ds
-        mov      %ax, %es
+	mov      %ds, %bx
+	mov      $(BIOS_VARS_SEG), %ax
+	mov      %ax, %ds
+	mov      %bx, %ds:BHYVE_VARS_DS
+	mov      %es, %ds:BHYVE_VARS_ES
+	mov      %ss, %ds:BHYVE_VARS_SS
+	mov      %esp, %ds:BHYVE_VARS_ESP
+
+	xor      %eax, %eax
+	mov      %ss, %ax
+	shl      $4, %eax
+	add      %eax, %esp
+	xor      %bx, %bx
+	mov      %bx, %ss
+	mov      %bx, %ds
+	mov      %bx, %es
         .endm
 
         .macro  RESTORE_SP_CFUNC_NOARGS
-        // Nothing to do here
+	mov     $(BIOS_VARS_SEG), %ax
+	mov     %ax, %ds
+	mov     %ds:BHYVE_VARS_ES, %ax
+	mov     %ax, %es
+	mov     %ds:BHYVE_VARS_SS, %ax
+	mov     %ax, %ss
+	mov     %ds:BHYVE_VARS_ESP, %eax
+	mov     %eax, %esp
+	mov     %ds:BHYVE_VARS_DS, %ax
+	mov     %ax, %ds
         .endm    
 
 	.section .start, "ax"
@@ -201,13 +213,11 @@ _jmptest:
 
         // Test bhyve print calls in C
         push    $0xbeeb   // artificial intr-vector in structure
-        PUSHREGS
         SET_SP_CFUNC
         pushl   %esp      // pointer to "struct callregs"
         call_c  bhyve_test_call
         popl    %eax      // pointer to "struct callregs"
         RESTORE_SP_CFUNC
-	POPREGS
         pop     %ax       // 0xbeeb intr-vector
 
 	// Erase VGA text area, and set fg white, bg black (0x0f20)
@@ -244,10 +254,12 @@ _jmptest:
 	pop	%ds
 
         // Configure RTC (see cmos_ram.html for bits in registers)
+#if 0
 	mov	$0x0a, %al     // disable NMI
 	outb	%al, $0x70
 	mov	$0x26, %al
 	outb	%al, $0x71
+#endif
 
 	mov	$0x0b, %al     // enable 24 hour, square wave
 	outb	%al, $0x70
@@ -400,12 +412,12 @@ gdt:
 gdt_end:
 
 smallgdt:
-	.word (sgdt_end-sgdt- 1)
-	.long (SEG_BIOS << 4) + sgdt
-sgdt:
+	.word (smgdt_end-smgdt- 1)
+	.long (SEG_BIOS << 4) + smgdt
+smgdt:
 	.long 0, 0
-	.long 0x0000FFFF,0x000F9300     // data
-sgdt_end:
+	.long 0x0000FFFF,0x00009200     // data
+smgdt_end:
 
 /* Switch to unreal mode */
 set_unrealmode_seg:
@@ -562,7 +574,7 @@ inta:
 	pushw	$0xa
 	jmp     int_swcommon
 int10:
-	pushw    $0x10
+	pushw   $0x10
 	jmp     int_swcommon
 int11: // get equipment list
 	mov     %cs:equip, %ax
@@ -637,6 +649,8 @@ int_bhyvebios: // bhyve bios hypercall
 	iret
 
 int_swcommon:
+	cli
+	cld
 #if 0
 	push %dx
 	push %ax
@@ -667,18 +681,57 @@ skip_1avec:
 	pop %dx
 #endif
 
-	INTH_PUSHREGS
+	SET_SP_CFUNC
 	jmp	int_common
 int_hwcommon:
-	INTH_PUSHREGS
+	cli
+	cld
+	SET_SP_CFUNC
 	jmp	int_common
 
 int_common:
-	cli
+	mov     %ds, %dx
+	mov     $(BIOS_VARS_SEG), %ax
+	mov	%ax, %ds
+	mov	%dx, %ds:BHYVE_VARS_DS
+	mov	%es, %ds:BHYVE_VARS_ES
+	mov	%ss, %ds:BHYVE_VARS_SS
+	mov	%esp, %ds:BHYVE_VARS_ESP
+	sgdt    %ds:BHYVE_VARS_GDTR_LIM
 
-	//call    set_unrealmode_seg  // crashes out of dosshell...
+	mov	%ds:BHYVE_VARS_GDTR_BASE, %eax
+	shr     $16, %eax
+	cmp	$0xf, %eax
+	jge     skip_gdtr_copy
 
-	SET_SP_CFUNC
+	// Copy gdtr to bios_vars
+	xor     %ecx, %ecx
+	mov	%ds:BHYVE_VARS_GDTR_LIM, %cx
+	mov     %ds:BHYVE_VARS_GDTR_BASE, %eax
+
+	add     $(2+4), %eax
+
+	// from ds:si
+	xor     %esi, %esi
+	mov	%ax, %si
+	shr	$16,%eax
+	shl	$12,%eax
+	mov	%ax, %ds
+
+	// to es:di
+	mov	$BIOS_VARS_SEG, %ax
+	mov	%ax, %es
+	xor     %edi, %edi
+	mov	$BHYVE_VARS_GDT_COPY, %di
+	rep     movsb
+
+	// override guest GDT
+	call    set_unrealmode_seg
+
+skip_gdtr_copy:
+	xor %eax, %eax
+	mov %ax, %ds
+	mov %ax, %es
 
 	// push regs
 	mov     %esp, %eax
@@ -686,15 +739,12 @@ int_common:
 	call_c  int_handler
 	popl    %ebx
 
-	//call    set_small_realmode_seg
-
 	cmp	$0x0, %ax
 	je	_ih_noeoi
 
 	call    eoi_master
 _ih_noeoi:
 	RESTORE_SP_CFUNC
-	INTH_POPREGS
 
 	// drop interrupt vector code
 	add     $2, %sp
